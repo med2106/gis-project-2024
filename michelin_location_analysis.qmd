@@ -1,0 +1,662 @@
+---
+title: "Location Analysis of NYC Michelin Star Restaurants"
+subtitle: "DSAN 6750 / PPOL 6805: GIS for Spatial Data Science"
+authors:
+  - name: Morgan Dreiss
+    email: med2106@georgetown.edu
+    corresponding: true
+df-print: kable
+bibliography: michelin_restaurants_lib.bib
+title-block-banner: '#BC1331'
+title-block-banner-color: 'black'
+format:
+  html:
+    df-print: kable
+    embed-resources: true
+    link-external-newwindow: true
+    link-external-icon: true
+    link-citations: true
+    toc: true
+    toc-position: left  
+---
+
+# Introduction
+
+In 1889, a French tire company, Michelin, started to produce a book of helpful road-side information for Europe. Soon after, they started to include recommended restaurants. Then in 1926, they started awarding stars to these restaurants. By 1931, the three-star system was born.[@michelinHistory2024] The Michelin Guide now rates over 30,000 establishments in over 30 territories across 3 continents. [@about_michelin_guide]
+
+![Page from Guide Michelin France 1911](images/original_michelin_guide.jpg)
+
+Michelin Stars are awarded annually, and they are looking for new Star awardees and revisit existing Star awarded restaurants to ensure they are maintaining their high standards.
+
+Michelin Restaurant Stars are described by the following:
+
+![](images/michelin_star.jpg){width="25"} **One MICHELIN Star:** restaurants use top quality ingredients, where dishes with distinct flavors are prepared to a consistently high standard.[@michelin_guide_star]
+
+![](images/michelin_stars2.jpg){width="51"} **Two MICHELIN Stars:** the personality and talent of the chef are evident in their expertly crafted dishes; their food is refined and inspired.[@michelin_guide_star]
+
+![](images/michelin_stars3.jpg){width="77"}**Three MICHELIN Stars:** given for the superlative cooking of chefs at the peak of their profession; their cooking is elevated to an art form and some of their dishes are destined to become classics.[@michelin_guide_star]
+
+Michelin Star Restaurants are decided by undercover Michelin Inspectors, who will visit the restaurant multiple times to determine if the quality is worthy of a star. A restaurant must apply for a Michelin Star or someone can nominate them to be considered. According the Michelin Guide, Inspectors rate the restaurants on the following criteria: [@michelin_guide_star]
+
+1.   Quality of products,
+
+2.   Mastery of flavor and cooking techniques,
+
+3.   Harmony of flavors,
+
+4.   The personality of the chef represented in the dining experience, and
+
+5.   Consistency between inspectors’ visits
+
+The Michelin Guide CEO stated that “The star is only about the quality of the food; it’s not about the service and the setting.”[@roberston_earnstar_2023] This statement and the criteria would have you believe that a restaurant does not have to overly fancy or expensive to be considered for a Michelin Star.
+
+However, many have wondered if there are additional, hidden criteria for Michelin Star Restaurant selection or what factors affect a restaurant's chances of being selected.
+
+## Literature Review
+
+Most of the literature on the selection of Michelin Star Restaurants comes from the Michelin Guide itself, but given that obtaining a Michelin Star can greatly boost the prestige of a restaurant, it is no surprise that people have studied the anatomy of a Michelin Star Restaurant. One study that was conducted on multiple Michelin Star Restaurants in Europe found that the key factors that lead to their success was "investment and investment types, sources of financing, pursuit of excellence, and \[the type of\] culinary craftsmanship involved."[@johnson_behind_stars_2005] There are also a few blog posts and culinary articles that try and parse out what makes a Michelin Star Restaurant[@roberston_earnstar_2023], however most of the literature is more interested in the effects on those establishments that obtain Michelin stars.
+
+Some have dubbed it the "Michelin Effect," [@bang_effect_2022] but many have been interested in the tangible benefits of obtaining a Star. One study found that Michelin Stars primarily "enhance social, hedonic and service quality values."[@bang_effect_2022] while others focused on the "Michelin-induced price increase of approximately 30% per Michelin star."[@gergaud_expert_2015] However, not everything is sunshine-and-daisies for restaurants that finally obtain a Michelin Star. Another study found that for restaurants in New York City, receiving a Michelin Star corresponded to an increased likelihood of restaurant closure.[@sands_double-edged_2024]
+
+Whether or not a Michelin Star is worth while for a restaurant is not the aim of this project. This project is primarily concerned with if there is a correlation of restaurant location and likelihood of obtaining a star. I was unable to find any work that was done on this topic. Which brings us to the data question:
+
+## Data Question
+
+*Does the proximity to a previous Michelin Star Restaurant increase a restaurants' chances of becoming one themselves?*
+
+## Methodology
+
+This project is going to focus on just one of the Michelin evaluated areas: New York City. New York City was the first Michelin Guide for North America and started in 2005, so there are quite a few years of Michelin Restaurants to work with. [@wiki_NYC_list_2024]
+
+Given that many Michelin Star Restaurants retain their stars for at least a year or two, I decided to put some temporal space between the years I would look at. I chose the years 2010 and 2020 so that there would be little overlap in Restaurants between the two sets. (There are 19 restaurants that appear on both the 2010 and 2020 list.)
+
+The actual location analysis was conducted using point processes and intensity functions to generate simulated points (restaurants).
+
+```{r}
+#| label: init-doc
+set.seed(6805)
+c_palette <- c('#BC1331', '#3C61A5', '#268A71')
+library(tidyverse) |> suppressPackageStartupMessages()
+library(sf) |> suppressPackageStartupMessages()
+library(mapview) |> suppressPackageStartupMessages()
+library(spatstat) |> suppressPackageStartupMessages()
+library(concaveman) |> suppressPackageStartupMessages()
+library(leaflet) |> suppressPackageStartupMessages()
+library(stars) |> suppressPackageStartupMessages()
+set.seed(6805)
+raster_eps <- 150
+```
+
+# Exploratory Data Analysis (EDA)
+
+First, we load in the data sets for the Michelin Star Restaurants in New York City. For this project was are going to focus on Manhattan as it contains the majority of the Michelin Star Restaurants opposed to the boroughs. The past Michelin Guide Restaurant list was obtained from Wikipedia.[@wiki_NYC_list_2024] The locations of the restaurants were generated by the Yelp API prior to importing the csv into this project. The details of this process can be requested.
+
+```{r}
+#| label: load-data-michelin
+# read in the sepereated year michelin files
+michelin_df_2010 <- read.csv('data/michelin_df_2010.csv')
+michelin_df_2020 <- read.csv('data/michelin_df_2020.csv')
+
+# read in the combined michelin files
+michelin_df <- read.csv('data/michelin_df_2010_2020.csv')
+michelin_df$Label <- as.factor(michelin_df$Label)
+
+# display the first few rows of the combined df
+print(head(michelin_df))
+```
+Once the data is loaded in, I turned them into sf objects to observe their locations within NYC.
+
+```{r}
+#| label: inital-map-michelin
+# Create the sf object for both years of Michelin star restaurants
+michelin_sf <- michelin_df |> sf::st_as_sf(
+  coords=c("Longitude", "Latitude"),
+  crs=4326
+) |> sf::st_transform(3857)
+
+# create the sf object for 2010 restaurants
+michelin_sf_2010 <- michelin_df_2010 |> sf::st_as_sf(
+  coords=c("Longitude", "Latitude"),
+  crs=4326
+) |> sf::st_transform(3857)
+
+# create the sf object for the 2020 restaurants
+michelin_sf_2020 <- michelin_df_2020 |> sf::st_as_sf(
+  coords=c("Longitude", "Latitude"),
+  crs=4326
+) |> sf::st_transform(3857)
+
+# view the combined with the label to see both
+mapview(michelin_sf, zcol = "Label", label = "Name", col.region = c_palette)
+```
+
+In order to conduct location analysis, I needed a population of restaurants to see where the majority of restaurants are located within the city. For this I used Outscraper, which queries all the restaurants for the Manhattan zip codes in Google Maps. The output file included the name and location of all the restaurants. Of note, this population of restaurants would be of restaurants that are open in 2024.[@outscraper]
+
+```{r}
+#| label: load-data-restaurants
+# read in the dataframe of all restaurants in Manhattan
+rest_pop_df <- read.csv('data/outscraper_manhattan_restaurants.csv')
+# select the important columns 
+rest_pop_df <- rest_pop_df |> select(c(name, street, latitude, longitude))
+
+# display the first few lines
+head(rest_pop_df)
+```
+I also wanted to view the restaurant population for NYC visually. 
+
+```{r}
+#| label: initial-map-restaurants
+# create the sf object for the restaurant "population"
+rest_pop_sf <- rest_pop_df |> sf::st_as_sf(
+  coords=c("longitude", "latitude"),
+  crs=4326
+) |> sf::st_transform(3857)
+
+# view the population of restaurants
+mapview(rest_pop_sf, col.region = c_palette)
+```
+
+It appears some of the locations were off for the queries restaurants and they fell outside of the zip codes that were queried. In addition, some of the 2020 Michelin Restaurants were outside of Manhattan. To resolve this, I am going to overlay the polygon of Manhattan form teh nycgeo library. 
+
+```{r}
+#| label: map_manhattan
+library(nycgeo)
+# load the borough boundaries as an sf object
+boroughs_sf <- nycgeo::borough_sf
+
+# view the first few rows of the dataset
+print(head(boroughs_sf))
+
+# filter for just Manhattan since that is what our all restaurant data is
+manhattan_sf <- boroughs_sf[boroughs_sf$borough_name == "Manhattan",] |> sf::st_transform(3857)
+
+# and view
+mapview(manhattan_sf, col.region = '#3C61A5')
+```
+
+Once I had the Manhattan polygon, I intersected all the restaurants sf objects with it to obtain just the Manhattan restaurants. The maps of all the restaurant sets are are below.
+
+Manhattan Michelin Star Restaurants (2010 and 2024):
+
+```{r}
+#| label: filter_restaurants
+# create a buffer around Manhattan to catch an edge cases
+manhattan_sf <- manhattan_sf |> st_buffer(10) 
+# check the coordinate reference system
+st_crs(manhattan_sf)
+
+
+# intersect Manhattan with all out sf point objects to get just those contained in Manhattan
+michelin_man_sf <- st_intersection(manhattan_sf, michelin_sf)
+michelin_man_sf_2010 <- st_intersection(manhattan_sf, michelin_sf_2010)
+michelin_man_sf_2020 <- st_intersection(manhattan_sf, michelin_sf_2020)
+rest_pop_man_sf <- st_intersection(manhattan_sf, rest_pop_sf)
+
+# view the michelin restaurants to confirm they are only in the correct area
+michelin_man_sf |> mapview(zcol = "Label", label = "Name", col.region=c_palette)
+```
+
+Manhattan Restaurant Population:
+```{r}
+#| label: map-manhattan-rest
+rest_pop_man_sf |> mapview(col.region = c_palette)
+```
+# Conduct Analysis
+
+Now that I have been visually able to observe the data, I want to see the actual density of the restaurants through heat maps. Creating intensity functions are also the first step to conducting analysis since we will need the intensity function to generate simulated restaurants in the future. 
+
+First, I created the window for our point processes. In this case, it is all of Manhattan.
+```{r}
+#| label: sfc-creation
+# create the window for our ppp objects from the Manhattan sf
+manhattan_sfc <- manhattan_sf |> sf::st_convex_hull()
+class(manhattan_sfc)
+```
+
+I then converted all our sf objects to point pattern objects, or ppp objects. 
+
+
+PPP object for Manhattan Michelin Star Restaurants (2010 and 2024):
+```{r}
+#| label: ppp_objects_michelin
+# create the ppp object from the michelin sf objects and the Manhattan window
+michelin_ppp <- as.ppp(sf::st_as_sfc(michelin_man_sf), W=as.owin(manhattan_sfc))
+
+# create the ppp object from the michelin sf objects and the Manhattan window
+michelin_ppp_2010 <- as.ppp(sf::st_as_sfc(michelin_man_sf_2010), W=as.owin(manhattan_sfc))
+# plot the ppp 2010 object
+michelin_ppp_2010 |> sf::st_as_sf() |> ggplot() +
+  geom_sf() +
+  labs(title = "2010 Michelin Restaurants") +
+  theme_classic()
+
+# create the ppp object from the michelin sf objects and the Manhattan window
+michelin_ppp_2020 <- as.ppp(sf::st_as_sfc(michelin_man_sf_2020), W=as.owin(manhattan_sfc))
+# plot the ppp 2210 object
+michelin_ppp_2020 |> sf::st_as_sf() |> ggplot() +
+  geom_sf() +
+  labs(title = "2020 Michelin Restaurants") +
+  theme_classic()
+```
+PPP object for Total Restaurant Population:
+```{r}
+#| label: ppp_object_pop
+# create the ppp object from our restaurant population and the Manhattan window
+rest_pop_ppp <- as.ppp(sf::st_as_sfc(rest_pop_man_sf), W=as.owin(manhattan_sfc))
+
+# plot the ppp object
+rest_pop_ppp |> sf::st_as_sf() |> ggplot() +
+  geom_sf() +
+  labs(title = "All Restaurants Population") +
+  theme_classic()
+```
+From the point pattern objects, I was able to construct the intensity functions. The intensity functions can then be mapped to a heat map to observe their concentrations by location.
+
+Intensity Functions for Manhattan Michelin Star Restaurants (2010 and 2024):
+```{r}
+#| label: intensity_michelin
+# use the density function on the ppp object to get the intensity function of 2010
+mich_int_2010 <- density(michelin_ppp_2010,eps=raster_eps)
+# plot the intensity function
+plot(mich_int_2010, main = 'Michelin Star Restaurants Intensity - 2010')
+contour(mich_int_2010, add=TRUE)
+
+# use the density function on the ppp object to get the intensity function of 2020
+mich_int_2020 <- density(michelin_ppp_2020,eps=raster_eps)
+# plot the intensity function
+plot(mich_int_2020, main = 'Michelin Star Restaurants Intensity - 2020')
+contour(mich_int_2020, add=TRUE)
+```
+Between the 2010 and 2020 Michelin Star Restaurants, we can see that there is a shift in the center of the heat map, in addition to a significant change in the contours of the map. The 2010 restaurants are more spread out with multiple contour rings. The 2020 restaurants' center is shifted south and they are much more concentrated around the center. 
+
+Intensity Functions for Total Restaurant Population:
+```{r}
+#| label: intensity_rest_pop
+# use the density function to 
+rest_pop_int <- density(rest_pop_ppp,eps=raster_eps)
+
+# plot the intensity function
+plot(rest_pop_int, main = "Total Restaurant Population Intensity")
+contour(rest_pop_int, add=TRUE)
+```
+
+The total restaurant population intensity function is similar to the 2010 Michelin restaurants, with a slightly more northern center and multiple contour rings. However, the scale of the intensity is obviously much higher since this is for all restaurants in NYC, not a small subset as with the Michelin Restaurants.
+
+I then validated the intensity functions by overlaying the points onto the functions.
+
+Michelin Star Restaurants (2010):
+```{r}
+#| label: ppp-intensity-overlay-michelin-2010
+michelin_2010_stars <- mich_int_2010 |> stars::st_as_stars()
+michelin_2010_points_sf <- michelin_ppp_2010 |> sf::st_as_sf() |> filter(label == "point")
+michelin_2010_points_sf |> ggplot() +
+  geom_stars(data=michelin_2010_stars) +
+  geom_sf() +
+  scale_fill_viridis_c(option="C", na.value = "transparent") +
+  labs(title = "Intensity & Point Overlay of 2010 Michelin Star Restaurants")+
+  theme_classic()
+```
+Michelin Star Restaurants (2020):
+```{r}
+#| label: ppp-intensity-overlay-michelin-2020
+michelin_2020_stars <- mich_int_2020 |> stars::st_as_stars()
+michelin_2020_points_sf <- michelin_ppp_2020 |> sf::st_as_sf() |> filter(label == "point")
+michelin_2020_points_sf |> ggplot() +
+  geom_stars(data=michelin_2020_stars) +
+  geom_sf() +
+  scale_fill_viridis_c(option="C", na.value = "transparent") +
+  labs(title = "Intensity & Point Overlay of 2020 Michelin Star Restaurants") +
+  theme_classic()
+```
+Total Restaurant Population:
+```{r}
+#| label: ppp_intensity_overlay_restpop
+library(stars)
+rest_pop_stars <- rest_pop_int |> stars::st_as_stars()
+rest_pop_points_sf <- rest_pop_ppp |> sf::st_as_sf() |> filter(label == "point")
+rest_pop_points_sf |> ggplot() +
+  stars::geom_stars(data=rest_pop_stars) +
+  geom_sf() +
+  scale_fill_viridis_c(option="C", na.value="transparent")+
+  labs(title = "Intensity & Point Overlay of All Restaurants")+
+  theme_classic()
+```
+## Hypothesis Testing
+
+To actually answer the initial question of if the proximity to a previous Michelin Star Restaurant increase a restaurants' chances of becoming one themselves, I am going to conduct a hypothesis test. To do this, I will simulate multiple possible sets of Michelin Star Restaurants around Manhattan based on the total restaurant population and apply at test statistic to see how these simulated restaurant sets differ from the actual set of 2020 Michelin Star restaurants.
+
+### Test Statistic
+
+The average distance between restaurants (points) will be our test statistic for the future hypothesis tests.
+
+I created a function that measures a set of restaurant's average distance to the set of 2010 Michelin Restaurants. 
+
+```{r}
+#| label: distance_calc_function
+
+compute_dist <- function(set_b_sf){
+  # Calculate pairwise distances between the points
+  # first sf is going to be the 2010 Michelin restaurants of Manhattan
+  distances <- st_distance(michelin_man_sf_2010, set_b_sf)
+  
+  # Convert the distance matrix to a vector and remove the diagonal (distance to itself)
+  dist_vector <- as.vector(distances)
+  dist_vector <- dist_vector[dist_vector != 0]
+  
+  # Calculate and return the average distance
+  avg_distance <- mean(dist_vector)
+  return(avg_distance)
+}
+```
+
+I then computed observed distance between the 2010 Michelin Star Restaurants and the 2020 Michelin Star Restaurants. The observed average distance was 3623 meters.
+
+```{r}
+#| label: obs_compute_dist
+obs_dist <- compute_dist(michelin_man_sf_2020)
+obs_dist
+```
+### Hypothesis
+
+The null and alternative hypotheses, based on the EDA:
+
+$H_0$: The average distance between Michelin Star Restaurants is the same as between most restaurants.
+$H_A$: The average distance between Michelin Star Restaurants is the less than between most restaurants.
+
+### Monte Carlo Simulation
+
+As said above, I will do this be simulating sets of restaurants. I created a function to create an sf object of simulated restaurants, with the total restaurant population intensity function influencing the likelihood of where the points will be placed. The function creates the same number of points of 2020 Michelin Star Restaurants in Manhattan, 62.
+
+```{r}
+#| label: monty_carlo_function
+set.seed(6805)
+# generate a number of points equal to the number of rows
+# in michelin_man_sf_2020, but with intensity function given by rest_pop_int
+michelin_star_sim <- function() {
+  michelin_sim <- spatstat.random::rpoint(
+    n = nrow(michelin_man_sf_2020),
+    f = rest_pop_int
+  )
+  # a ppp object is return from the spatstat.random function
+  # turn it back into a sf object
+  michelin_sim <- michelin_sim |> sf::st_as_sf()
+  # set the crs to the rest of our data 3857
+  st_crs(michelin_sim) <- 3857
+  return(michelin_sim)
+}
+```
+
+I ran a single simulation and observed the returned sf object.
+
+```{r}
+#| label: singe-sim
+# call the function once, and plot it
+single_michelin_sim_sf <- michelin_star_sim()
+single_michelin_sim_sf |> ggplot() +
+    geom_sf() +
+    labs(title = "Simulated 2020 Michelin Star Restaurants")+
+    theme_classic()
+```
+This simulation of restaurants seems reasonable, but I also wanted to check the test statistic for this single simulation.
+
+```{r}
+#| label: test-stat-single-sim
+# generate the distance to all the new simulated Michelin star restaurants
+single_michelin_sim_distance <- compute_dist(single_michelin_sim_sf)
+single_michelin_sim_distance
+```
+This average distance is much higher than our observed value, but I will run 999 simulations to continue with the analysis.
+
+Looping through the following code 999 times, gave us a list of all the test statistic for each simulation.
+
+```{r}
+#| label: all_sims
+set.seed(6805)
+
+# initialized empty list to store test statistics for each simulation
+all_sims_dist <- list()
+# number of desired simulations
+num_sims = 999
+
+# run through all the simulations
+for (n in 1:num_sims){
+  # call the michelin_star_sim function that returns an sf object
+  new_sim_sf <- michelin_star_sim()
+  # compute the distance to the points of the new sf object
+  new_dist <- compute_dist(new_sim_sf)
+  # add the test statistic in the list
+  all_sims_dist <- append(all_sims_dist, new_dist)
+}
+
+# check that all the distances were computed
+print(length(all_sims_dist))
+# check the first five
+print(all_sims_dist[1:6])
+```
+
+
+I converted the list into a dataframe to properly observe the distributions of average distances.
+```{r}
+#| lable: sim-dist-plot
+
+# turn our list of simulated distances into a df
+sim_dist_df <- as.data.frame(do.call(rbind, all_sims_dist))
+sims_dist_mean <- mean(sim_dist_df$V1)
+
+# plot the density of distances plus the observed average distance
+sim_dist_plot <- sim_dist_df |> ggplot(aes(x=V1))+
+  geom_density(fill=c_palette[2], alpha=0.5) +
+  geom_vline(xintercept = obs_dist, color=c_palette[1]) +
+  geom_vline(xintercept = sims_dist_mean, color=c_palette[3])+
+  labs(
+    title = "Density of Simulated Michelin Restaurant Average Distances",
+    x = "Average Distance Between Restaurants (m)",
+    y = "Density"
+  )+
+  theme_classic()
+
+sim_dist_plot
+```
+As you can see, the observed average distance is much lower than all the simulated test statistics. 
+
+```{r}
+#| label: p-value_calc
+print(obs_dist)
+print(sims_dist_mean)
+more_extreme_df <- sim_dist_df[sim_dist_df$value <= obs_dist,]
+more_extreme_prop <- nrow(more_extreme_df) / nrow(sim_dist_df)
+more_extreme_prop
+
+```
+When looking between the mean simulated test statistic and the observed test statistic, there is quite a large gap. And when looking at the p-values, we see that there are no simulations that are as low as the observed average distance. 
+
+At the 95% confidence interval, we reject the null hypothesis.
+
+## Hypothesis Test with Different Restaurant Population
+
+The large gap between the simulated and observed test statistic made me question if the total restaurants in Manhattan was the proper population to create the simulated restaurant sets.
+
+Technically there is no requirements for Michelin Star Restaurants to be expensive. However, most of the Michelin Star Restaurants do fall on the pricier end of the spectrum. With that in mind, I decided to run an additional set of simulations, but using expensive Manhattan restaurants as the restaurant population when simulating sets of restaurants. 
+
+### Data Prep 2.0
+
+I ran through most of the initial steps defined above prior to the hypothesis test, but for a new set of restaurants. 
+
+The total restaurant data set had the price range defined for each restaurant. I began by filtering the data frame to only include restaurants that were defined by three or four dollar signs (according to Google Maps). I then ran through all the same steps as above, converting to sf, filtering for just Manhattan, converting to ppp object, and generating the intensity function.
+
+Filter dataframe:
+```{r}
+# read in the dataframe of all restaurants in Manhattan
+rest_pop_df <- read.csv('data/outscraper_manhattan_restaurants.csv')
+# select the important columns
+# keeping range this time to filter for expensive restaurants
+rest_pop_df <- rest_pop_df |> select(c(name, street, latitude, longitude, range))
+# convert the price range category into a factor
+rest_pop_df$range <- as.factor(rest_pop_df$range)
+
+# create a new df that only has the most expensive restaurants
+expensive_df <- rest_pop_df |> filter(range == "$$$" | range == "$$$$")
+
+# display the first few lines
+head(expensive_df)
+```
+
+Convert to sf object and filter for Manhattan:
+```{r}
+# create the sf object for the expensive restaurant "population"
+expensive_sf <- expensive_df |> sf::st_as_sf(
+  coords=c("longitude", "latitude"),
+  crs=4326
+) |> sf::st_transform(3857)
+
+# intersect with Manhattan area
+expensive_man_sf <- st_intersection(manhattan_sf, expensive_sf)
+
+# view the population of restaurants
+mapview(expensive_man_sf, col.region = c_palette)
+```
+Create ppp object:
+```{r}
+#| label: ppp_object_pop_expensive
+# create the ppp object from our restaurant population and the Manhattan window
+expensive_ppp <- as.ppp(sf::st_as_sfc(expensive_man_sf), W=as.owin(manhattan_sfc))
+
+# plot the ppp object
+expensive_ppp |> sf::st_as_sf() |> ggplot() +
+  geom_sf() +
+  labs(title = "Expensive Restaurants Population") +
+  theme_classic()
+```
+
+Generate Intensity Function:
+```{r}
+#| label: intensity_rest_pop_expensive
+# use the density function to 
+expensive_int <- density(expensive_ppp,eps=raster_eps)
+
+# plot the intensity function
+plot(expensive_int, main = "Expensive Restaurant Population Intensity")
+contour(expensive_int, add=TRUE)
+```
+
+Create PPP object:
+```{r}
+#| label: ppp_intensity_overlay_expensive
+library(stars)
+expensive_stars <- expensive_int |> stars::st_as_stars()
+expensive_points_sf <- expensive_ppp |> sf::st_as_sf() |> filter(label == "point")
+expensive_points_sf |> ggplot() +
+  stars::geom_stars(data=expensive_stars) +
+  geom_sf() +
+  scale_fill_viridis_c(option="C", na.value="transparent")+
+  labs(title = "Intensity & Point Overlay of Expensive Restaurants")+
+  theme_classic()
+```
+
+Redefine the Simulation Function with the new Restaurant Population:
+```{r}
+#| label: monty_carlo_function_expensive
+set.seed(6805)
+# generate a number of points equal to the number of rows
+# in michelin_man_sf_2020, but with intensity function given by rest_pop_int
+michelin_star_sim2 <- function() {
+  michelin_sim <- spatstat.random::rpoint(
+    n = nrow(michelin_man_sf_2020),
+    f = expensive_int
+  )
+  # a ppp object is return from the spatstat.random function
+  # turn it back into a sf object
+  michelin_sim <- michelin_sim |> sf::st_as_sf()
+  # set the crs to the rest of our data 3857
+  st_crs(michelin_sim) <- 3857
+  return(michelin_sim)
+}
+```
+
+Single Simulation:
+```{r}
+#| label: singe-sim-expensive
+# call the function once, and plot it
+single_michelin_sim_expensive_sf <- michelin_star_sim2()
+single_michelin_sim_expensive_sf |> ggplot() +
+    geom_sf() +
+    labs(title = "Simulated 2020 Michelin Star Restaurants (Expensive)")+
+    theme_classic()
+```
+Just from doing one simulation, this could be more promising and more indicative of Michelin restaurant populations. 
+
+### Monte Carlo Simulations with Expensive Restaurant Population
+
+Looping through the following code 999 times, gave us a list of all the test statistic for each simulation.
+
+```{r}
+#| label: all_sims_expensive
+set.seed(6805)
+
+# initialized empty list to store test statistics for each simulation
+all_sims_dist_2 <- list()
+# number of desired simulations
+num_sims = 999
+
+# run through all the simulations
+for (n in 1:num_sims){
+  # call the michelin_star_sim function that returns an sf object
+  new_sim_sf <- michelin_star_sim2()
+  # compute the distance to the points of the new sf object
+  new_dist <- compute_dist(new_sim_sf)
+  # add the test statistic in the list
+  all_sims_dist_2 <- append(all_sims_dist_2, new_dist)
+}
+
+# check that all the distances were computed
+print(length(all_sims_dist_2))
+# check the first five
+print(all_sims_dist_2[1:6])
+```
+I converted the list into a dataframe to properly observe the distributions of average distances.
+```{r}
+#| lable: sim-dist-plot
+
+# turn our list of simulated distances into a df
+sim_dist_expen_df <- as.data.frame(do.call(rbind, all_sims_dist_2))
+sims_dist_expen_mean <- mean(sim_dist_expen_df$V1)
+
+# plot the density of distances plus the observed average distance
+sim_dist_plot2 <- sim_dist_expen_df |> ggplot(aes(x=V1))+
+  geom_density(fill=c_palette[2], alpha=0.5) +
+  geom_vline(xintercept = obs_dist, color=c_palette[1]) +
+  geom_vline(xintercept = sims_dist_expen_mean, color=c_palette[3])+
+  labs(
+    title = "Density of Simulated Michelin Restaurant Average Distances (Expensive)",
+    x = "Average Distance Between Restaurants (m)",
+    y = "Density"
+  )+
+  theme_classic()
+
+sim_dist_plot2
+```
+As you can see, the observed average distance is still much lower than all the simulated test statistics, however the gap between the two isn't as pronounced as our last test.
+
+Looking at the values of the simulated and observed test statistic:
+```{r}
+print(obs_dist)
+print(sims_dist_expen_mean)
+more_extreme_df2 <- sim_dist_expen_df[sim_dist_expen_df$value <= obs_dist,]
+more_extreme_prop_2 <- nrow(more_extreme_df2) / nrow(sim_dist_expen_df)
+more_extreme_prop_2
+```
+Again no simulated average distances come close to the observed value and there is still almost a 1000 meter difference between the observed and simulated average distances. So we once again, at the 95% confidence interval, we reject the null hypothesis.
+
+Given these two tests, being in closer proximity to a current (or previous) Michelin Star Restaurant increases your chances to become a Michelin Star Restaurant in New York City.
+
+# Conclusion and Discussion
+
+The results of these tests are really only indicative of the New York City Michelin Guide. It is likely that all the different regions that have Michelin Guides have different cultures and trends among themselves. These results make you question if there are additional, hidden criteria that result from inspector bias (or possibly overt, hidden criteria given from Michelin).
+
+There also could be underlying criteria for what restaurants aspire to become Michelin Starred, and possibly that is what this project has captured. Either way, there are likely additional features of the restaurants that cause them to be closer in proximity to each other. However, it remains possible that simply by being located closer to others makes you more likely to become one.
+
+Future work could be to try and uncover what those "hidden" features are, or the analysis could be conducted on other areas where Michelin has Guides. 
+
+Overall, if you are interested in your restaurant obtaining a Michelin Star in New York City, it would be safer for you to find a location that is in close proximity to other Michelin Star Restaurants.
+
+

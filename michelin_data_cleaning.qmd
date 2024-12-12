@@ -1,0 +1,174 @@
+# Michelin Star Data Collection and Cleaning
+
+
+```{r}
+library(tidyverse) |> suppressPackageStartupMessages()
+library(sf) |> suppressPackageStartupMessages()
+library(mapview) |> suppressPackageStartupMessages()
+library(spatstat) |> suppressPackageStartupMessages()
+library(concaveman) |> suppressPackageStartupMessages()
+library(spdep) |> suppressPackageStartupMessages()
+library(stringr)  |> suppressPackageStartupMessages()
+library(httr) |> suppressPackageStartupMessages()
+library(jsonlite) |> suppressPackageStartupMessages()
+c_pallete <- c('#BC1331', '#3C61A5', '#268A71', '#FAE89C', '#C39000',  '#F2B6D0')
+```
+
+## Clean All Restaurant Population Data
+```{r}
+all_restaurants <- read.csv('outscraper_manhattan_restaurants.csv')
+
+address_all_rest <- all_restaurants |> select(c(name, street, postal_code, latitude, longitude))
+
+address_all_rest$address <- paste(address_all_rest$street,', New York, NY,', address_all_rest$postal_code)
+address_all_rest <- address_all_rest |> select(-c(street, postal_code))
+address_all_rest$clean_name <- str_replace_all( address_all_rest$name, "[^[:alnum:]]", "") |> tolower()
+print(head(address_all_rest))
+```
+## Obtain Addresses for all Michelin Star Restaurant Locations
+
+Yelp API needed to do the fact that many of the Michelin Restaurants from 2010 are closed and therefore are not found in the all restaurant data set.
+
+```{r}
+# read in the dataframe and observe the first few entries
+michelin_df <- read.csv('michelin_star_places.csv')
+print(head(michelin_df,10))
+```
+To get the addresses and latitude and longitude of the restaurants, use the Yelp API.
+Create the API connection and then a function to return the desired information about the business.
+
+```{r}
+API_KEY = "7MA80ukkd5_25NfZ30Zot6ytlabzOkU4c8sUUxzfZtAn8K2RlQaq3_jlsSfO2xx0wxYUxqkjFTaiJ-EYMOvF_5r541EYTrr4bMBNcmhJMDFZgKKAb2-49StEE0NPZ3Yx"
+
+# Yelp API endpoint for searching businesses
+API_URL <- "https://api.yelp.com/v3/businesses/search"
+
+# Function to get business details (name, address, latitude, longitude)
+get_business_details <- function(business_name, city) {
+  
+  # Set up the headers with the API key for authentication
+  headers <- add_headers(
+    `Authorization` = paste("Bearer", API_KEY)
+  )
+  
+  # Set up the parameters for the search (business name and city)
+  params <- list(
+    term = business_name,   # Business name
+    location = city,        # City name
+    limit = 1               # Limit to one result
+  )
+  
+  # Make the GET request to the Yelp API
+  response <- GET(API_URL, headers, query = params)
+  
+  # Check if the request was successful
+  if (status_code(response) == 200) {
+    # Parse the JSON response
+    data <- fromJSON(content(response, "text", encoding = "UTF-8"))
+    
+    # Check if businesses were found
+    if (length(data$businesses) > 0) {
+      # Extract business details from the first business in the results
+      business <- data$businesses
+
+      
+      # Extract business name, address, latitude, and longitude
+      name <- business$name
+      address <- paste(business$location$address1, business$location$city, business$location$state, business$location$zip_code)
+      latitude <- business$coordinates$latitude
+      longitude <- business$coordinates$longitude
+      
+      # Return the business details as a list
+      return(list(
+        name = name,
+        address = address,
+        latitude = latitude,
+        longitude = longitude
+        
+
+      ))
+
+    } else {
+      # If no businesses are found, return an informative message
+      return(list(
+        name = "NA",
+        address = "NA",
+        latitude = "NA",
+        longitude = "NA"
+      ))
+    }
+  } else {
+    # If the request fails, return an error message
+    return(paste("Error:", status_code(response), content(response, "text", encoding = "UTF-8")))
+  }
+}
+```
+
+Use a for loop over the michelin dataframe to seach each business on yelp. Then return the desired information and assigning it to the michelin dataframe.
+
+```{r}
+michelin_df$Address <- "A"
+michelin_df$Latitude <- "L"
+michelin_df$Longitude <- "L"
+
+
+for (i in 0:nrow(michelin_df)){
+  business_name = michelin_df$Name[i]
+  city = "Manhattan"
+  business_info <- get_business_details(business_name, city)
+  address <- business_info$address
+  lat <- business_info$latitude
+  long <- business_info$longitude
+  michelin_df$Address[i] <- address
+  michelin_df$Latitude[i] <- lat
+  michelin_df$Longitude[i] <- long
+}
+                 
+print(head(michelin_df))
+```
+Save the dataframe as a csv so that the data is not lost
+
+```{r}
+write.csv(michelin_df, 'michelin_addresses.csv')
+```
+
+
+```{r}
+# break apart the years, with only keeping the rows that are active for each year
+michelin_df_2010 <- michelin_df[!is.na(michelin_df$X2010),] |> select(-c(X2014, X2020))
+michelin_df_2014 <- michelin_df[!is.na(michelin_df$X2014),] |> select(-c(X2010, X2020))
+michelin_df_2020 <- michelin_df[!is.na(michelin_df$X2020),] |> select(-c(X2010, X2014))
+```
+
+```{r}
+# confirm that the lat and long are there for each year
+print(nrow(michelin_df_2010))
+print(sum(is.na(michelin_df_2010$address)))
+print(nrow(michelin_df_2014))
+print(sum(is.na(michelin_df_2014$address)))
+print(nrow(michelin_df_2020))
+print(sum(is.na(michelin_df_2020$address)))
+```
+
+Since the location information is there for all the restaurants, I will save them to csv files to access them later.
+
+```{r}
+write.csv(michelin_df_2010, 'michelin_df_2010.csv')
+write.csv(michelin_df_2014, 'michelin_df_2014.csv')
+write.csv(michelin_df_2020, 'michelin_df_2020.csv')
+```
+
+Create one more data frame that has the restaurants but just the label for what year it was a Michelin star
+
+```{r}
+michelin_df_2010$Label <- "2010"
+michelin_df_2020$Label <- "2020"
+michelin_df_2010 <- michelin_df_2010 |> select(-X2010)
+michelin_df_2020 <- michelin_df_2020 |> select(-X2020)
+michelin_df_wider <- merge(michelin_df_2010, michelin_df_2020, all = TRUE)
+```
+
+```{r}
+print(nrow(michelin_df_wider))
+write.csv(michelin_df_wider, 'michelin_df_2010_2020.csv')
+```
